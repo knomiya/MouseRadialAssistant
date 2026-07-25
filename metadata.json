@@ -1,0 +1,6 @@
+{
+  "name": "鼠标径向快捷助手",
+  "description": "轻量、优雅且高效的纯鼠标驱动桌面径向快捷助手与高保真系统控制台",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
