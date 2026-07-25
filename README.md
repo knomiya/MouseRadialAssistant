@@ -49,30 +49,6 @@
 
 打开助手 → 点击设置节点 → **软件设置** Tab → 点击「修改唤起按键」→ 按下你想要的按键即可。
 
-## 本地开发
-
-### 环境要求
-
-- [Node.js](https://nodejs.org/) 18+
-- [Rust](https://rustup.rs/) stable
-- Windows 10/11
-
-### 启动开发服务器
-
-```bash
-git clone https://github.com/knomiya/MouseRadialAssistant.git
-cd MouseRadialAssistant
-
-npm install
-npm run tauri:dev
-```
-
-### 构建发布包
-
-```bash
-npm run tauri:build
-# 产物位于 src-tauri/target/release/
-```
 
 ## 配置说明
 
