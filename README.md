@@ -36,9 +36,6 @@
 <table>
   <tr>
     <td align="center"><b>🚀 快速启动</b><br/><img src="https://github.com/user-attachments/assets/a8790b2c-9b77-49ab-b80c-d433361a469a"/></td>
-    <td align="center"><b>📋 剪贴板历史</b><br/><img src="https://github.com/user-attachments/assets/8ef9cebf-613d-4b90-8da4-3597532b4a25"/></td>
-  </tr>
-  <tr>
     <td align="center"><b>🪟 活动窗口切换</b><br/><img src="https://github.com/user-attachments/assets/47aa3c96-ca77-46ce-80dd-9ce9ea9d7891"/></td>
     <td align="center"><b>🖥️ 系统监控</b><br/><img src="https://github.com/user-attachments/assets/9e1871fd-3f31-487f-a25a-b356c2ee1d2a"/></td>
   </tr>
