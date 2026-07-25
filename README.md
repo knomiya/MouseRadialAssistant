@@ -31,15 +31,15 @@
 
 前往 [Releases 页面](https://github.com/knomiya/MouseRadialAssistant/releases/latest) 下载最新版本：
 
-- **`MouseRadialAssistant_vX.X.X.zip`** — 绿色免安装版（解压即用）
-- **`mouse-radial-assistant_x64-setup.exe`** — NSIS 安装程序
-- **`mouse-radial-assistant_x64_en-US.msi`** — MSI 安装包
+- **`MouseRadialAssistant_vX.X.X.zip`** — 绿色免安装版，解压后直接双击 exe 即可运行
 
 > Windows 可能弹出安全提示，点击「更多信息 → 仍要运行」即可。程序未签名，无恶意行为。
 
+
 ## 快速开始
 
-1. 解压 ZIP 或运行安装程序
+1. 下载 ZIP 解压到任意目录
+
 2. 启动后托盘出现图标，代表程序已在后台运行
 3. **按鼠标侧下键（MouseButton 4）** 在鼠标位置唤出圆形菜单
 4. 点击节点打开对应功能面板
