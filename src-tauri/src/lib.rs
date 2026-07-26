@@ -827,7 +827,9 @@ pub fn run() {
                             let current_key = get_summon_key_from_button(button);
 
                             let is_match = match (&current_key, &reg.config.summon_key) {
-                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => c1 == c2,
+                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => {
+                                    c1 == c2 || (*c1 >= 4 && *c2 >= 4)
+                                }
                                 _ => false,
                             };
 
@@ -862,7 +864,9 @@ pub fn run() {
                             // Cancel any pending hold-to-summon
                             let current_key = get_summon_key_from_button(button);
                             let is_match = match (&current_key, &reg.config.summon_key) {
-                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => c1 == c2,
+                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => {
+                                    c1 == c2 || (*c1 >= 4 && *c2 >= 4)
+                                }
                                 _ => false,
                             };
                             if is_match {
@@ -872,6 +876,7 @@ pub fn run() {
                             }
                             Some(event)
                         }
+
 
                         EventType::KeyPress(key) => {
                             let current_key = get_summon_key_from_key(key);
