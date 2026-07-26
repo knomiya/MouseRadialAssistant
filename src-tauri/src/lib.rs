@@ -271,13 +271,18 @@ fn load_config() -> UserConfig {
     if let Ok(mut file) = File::open("assistant_config.json") {
         let mut data = String::new();
         if file.read_to_string(&mut data).is_ok() {
-            if let Ok(cfg) = serde_json::from_str::<UserConfig>(&data) {
+            if let Ok(mut cfg) = serde_json::from_str::<UserConfig>(&data) {
+                // Protect against accidental left click (Mouse 1) saving
+                if matches!(cfg.summon_key, SummonKey::Mouse(1)) {
+                    cfg.summon_key = SummonKey::Mouse(4);
+                }
                 return cfg;
             }
         }
     }
     UserConfig {
         summon_key: SummonKey::Mouse(4),
+
         apps: vec![
             AppConfig {
                 name: "命令行终端".to_string(),
@@ -391,6 +396,40 @@ fn do_summon() {
         });
     }
 }
+
+/// Perform summon at the exact center of primary monitor (used for System Tray click).
+fn do_summon_at_center() {
+    if let Some(handle) = APP_HANDLE.get() {
+        let handle = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let state_c = handle.state::<SystemState>();
+            if let Some(window) = handle.get_webview_window("main") {
+                let scale_factor = window.scale_factor().unwrap_or(1.0);
+                let (center_x, center_y) = if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let size = monitor.size();
+                    ((size.width as f64 / 2.0 / scale_factor) as i32, (size.height as f64 / 2.0 / scale_factor) as i32)
+                } else {
+                    (960, 540)
+                };
+
+                {
+                    let mut r = state_c.region.lock().unwrap();
+                    r.is_active = true;
+                    r.center_x = (center_x as f64 * scale_factor) as i32;
+                    r.center_y = (center_y as f64 * scale_factor) as i32;
+                }
+                window.set_ignore_cursor_events(false).ok();
+                window.show().unwrap();
+                window.set_focus().unwrap();
+                if let Some(clip_text) = read_clipboard_native() {
+                    window.emit("clipboard_update", clip_text).ok();
+                }
+                window.emit("summon_menu", POINT { x: center_x, y: center_y }).unwrap();
+            }
+        });
+    }
+}
+
 
 fn read_clipboard_native() -> Option<String> {
     if let Ok(mut ctx) = arboard::Clipboard::new() {
@@ -672,6 +711,30 @@ fn start_recording_key(state: tauri::State<'_, SystemState>) -> Result<(), Strin
 }
 
 #[tauri::command]
+fn set_custom_summon_key(code: u8, state: tauri::State<'_, SystemState>) -> Result<String, String> {
+    let mut reg = state.region.lock().unwrap();
+    let new_key = SummonKey::Mouse(code);
+    reg.is_recording = false;
+    reg.config.summon_key = new_key.clone();
+    save_config(&reg.config);
+
+    let key_name = get_key_name(&new_key);
+    if let Some(handle) = APP_HANDLE.get() {
+        let name_c = key_name.clone();
+        let handle_c = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(window) = handle_c.get_webview_window("main") {
+                window.emit("key_recorded", name_c).ok();
+            }
+        });
+    }
+    Ok(key_name)
+}
+
+
+
+
+#[tauri::command]
 fn get_current_summon_key(state: tauri::State<'_, SystemState>) -> Result<(String, String), String> {
     let reg = state.region.lock().unwrap();
     let name = get_key_name(&reg.config.summon_key);
@@ -756,11 +819,7 @@ pub fn run() {
                             app.exit(0);
                         }
                         "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                window.set_ignore_cursor_events(false).ok();
-                                window.show().unwrap();
-                                window.set_focus().unwrap();
-                            }
+                            do_summon_at_center();
                         }
                         "hide" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -779,14 +838,14 @@ pub fn run() {
                                 window.set_ignore_cursor_events(true).ok();
                                 window.hide().unwrap();
                             } else {
-                                window.set_ignore_cursor_events(false).ok();
-                                window.show().unwrap();
-                                window.set_focus().unwrap();
+                                do_summon_at_center();
                             }
                         }
                     }
                 })
+
                 .build(app)?;
+
 
             // Start global mouse hook thread
             std::thread::spawn(move || {
@@ -801,7 +860,15 @@ pub fn run() {
                     if reg.is_recording {
                         let recorded_opt = match event.event_type {
                             EventType::KeyPress(key) => Some(get_summon_key_from_key(key)),
-                            EventType::ButtonPress(btn) => Some(get_summon_key_from_button(btn)),
+                            EventType::ButtonPress(btn) => {
+                                let k = get_summon_key_from_button(btn);
+                                // Ignore Left (1) and Right (2) clicks to prevent UI interaction interference
+                                if matches!(k, SummonKey::Mouse(1) | SummonKey::Mouse(2)) {
+                                    None
+                                } else {
+                                    Some(k)
+                                }
+                            }
                             _ => None,
                         };
 
@@ -828,7 +895,7 @@ pub fn run() {
 
                             let is_match = match (&current_key, &reg.config.summon_key) {
                                 (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => {
-                                    c1 == c2 || (*c1 >= 4 && *c2 >= 4)
+                                    *c1 == *c2 || (*c2 >= 4 && (*c1 >= 4 || matches!(button, rdev::Button::Unknown(_))))
                                 }
                                 _ => false,
                             };
@@ -865,7 +932,7 @@ pub fn run() {
                             let current_key = get_summon_key_from_button(button);
                             let is_match = match (&current_key, &reg.config.summon_key) {
                                 (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => {
-                                    c1 == c2 || (*c1 >= 4 && *c2 >= 4)
+                                    *c1 == *c2 || (*c2 >= 4 && (*c1 >= 4 || matches!(button, rdev::Button::Unknown(_))))
                                 }
                                 _ => false,
                             };
@@ -876,6 +943,7 @@ pub fn run() {
                             }
                             Some(event)
                         }
+
 
 
                         EventType::KeyPress(key) => {
@@ -972,7 +1040,9 @@ pub fn run() {
             empty_recycle_bin,
             start_recording_key,
             get_current_summon_key,
+            set_custom_summon_key,
             get_user_config,
+
             save_full_config,
             select_exe_file,
             get_open_windows,

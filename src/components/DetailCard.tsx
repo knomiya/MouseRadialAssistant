@@ -226,6 +226,34 @@ export const DetailCard: React.FC<DetailCardProps> = ({
     };
   }, [item.id]);
 
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const handleMouseCapture = (e: MouseEvent) => {
+      // DOM e.button: 3 = Side-Down (XButton1/Mouse 4), 4 = Side-Up (XButton2/Mouse 5)
+      if (e.button === 3 || e.button === 4) {
+        e.preventDefault();
+        e.stopPropagation();
+        const code = e.button === 3 ? 4 : 5;
+        invoke<string>('set_custom_summon_key', { code })
+          .then((name) => {
+            setCurrentKeyName(name);
+            setIsRecording(false);
+            fetchUserConfig();
+          })
+          .catch(console.error);
+      }
+    };
+
+    window.addEventListener('mousedown', handleMouseCapture, true);
+    window.addEventListener('auxclick', handleMouseCapture, true);
+    return () => {
+      window.removeEventListener('mousedown', handleMouseCapture, true);
+      window.removeEventListener('auxclick', handleMouseCapture, true);
+    };
+  }, [isRecording]);
+
+
   const handleCopy = (text: string, id: string) => {
     invoke('write_clipboard', { content: text })
       .then(() => {

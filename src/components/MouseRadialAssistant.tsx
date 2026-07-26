@@ -269,28 +269,45 @@ export const MouseRadialAssistant: React.FC = () => {
   const activeAngle = activeIndex >= 0 ? startAngle + activeIndex * angleStep : 0;
   const activeNodeY = Math.sin(activeAngle) * radius;
 
-  // ── SVG line: measure active button position from real DOM after animation ──
-  // motion.div uses translate(-50%,-50%), so its left edge = position.x - centerSize/2
-  const centerSize = nodeSize + 6; // matches RadialMenu center button size
+  // ── SVG line: measure exact button apex and card left edge from real DOM ──
   useLayoutEffect(() => {
-    if (!activeItem || !position) { setSvgCoords(null); return; }
-    // Wait for framer-motion animation to settle (200ms delay + 0.03*index padding)
-    const timer = setTimeout(() => {
+    if (!activeItem || !position) {
+      setSvgCoords(null);
+      return;
+    }
+
+    const updateCoords = () => {
       const btn = document.querySelector(`[data-node-id="${activeItem.id}"]`) as HTMLElement | null;
-      if (!btn) return;
-      const rect = btn.getBoundingClientRect();
-      // x2: card left edge in screen coords = outer-div left edge + cardLeftX
-      //   outer-div left edge = position.x - centerSize/2
-      const x2 = position.x - centerSize / 2 + cardLeftX;
-      setSvgCoords({
-        x1: rect.right,
-        y1: rect.top + rect.height / 2,
-        x2,
-        y2: rect.top + rect.height / 2,
-      });
-    }, 260);
-    return () => clearTimeout(timer);
-  }, [activeItem, position, nodeSize, cardLeftX, centerSize]);
+      const card = document.getElementById('detail-card-overlay');
+      if (!btn || !card) return;
+
+      const btnRect = btn.getBoundingClientRect();
+      const cardRect = card.getBoundingClientRect();
+
+      // Button exact physical center in screen coords
+      const btnCenterX = btnRect.left + btnRect.width / 2;
+      const btnCenterY = btnRect.top + btnRect.height / 2;
+
+      // X1 = Button right apex = Center + (nodeSize / 2)
+      const x1 = btnCenterX + nodeSize / 2;
+      const y1 = btnCenterY;
+
+      // X2 = Card left border exact screen position
+      const x2 = cardRect.left;
+      const y2 = btnCenterY;
+
+      setSvgCoords({ x1, y1, x2, y2 });
+    };
+
+    updateCoords();
+    const timer1 = setTimeout(updateCoords, 80);
+    const timer2 = setTimeout(updateCoords, 260);
+    return () => {
+      clearTimeout(timer1);
+      clearTimeout(timer2);
+    };
+  }, [activeItem, position, nodeSize, radius, cardGap]);
+
 
   return (
     <div
@@ -377,6 +394,7 @@ export const MouseRadialAssistant: React.FC = () => {
             {/* Detail Card Overlay */}
             {activeItem && (
               <div
+                id="detail-card-overlay"
                 onClick={(e) => e.stopPropagation()}
                 style={{
                   position: 'absolute',
