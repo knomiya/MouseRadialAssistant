@@ -51,7 +51,9 @@ interface UserConfig {
   monitor_order?: string[];
   window_click_action?: string;
   hotkey_whitelist?: string[];
+  hold_ms?: number;
 }
+
 
 interface WindowItem {
   hwnd: number;
@@ -1004,8 +1006,39 @@ export const DetailCard: React.FC<DetailCardProps> = ({
                     <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
                   </label>
                 </div>
+
+                {/* Hold-to-Summon Delay */}
+                <div className="flex flex-col gap-2">
+                  <span className="text-[9px] font-bold text-slate-400 font-mono whitespace-nowrap">长按唤出延迟</span>
+                  <div className={`p-3 rounded-xl border flex flex-col gap-2 ${isDark ? 'bg-slate-800/40 border-slate-700/60' : 'bg-slate-50/50 border-slate-100'}`}>
+                    <div className="flex justify-between items-center text-xs whitespace-nowrap gap-2">
+                      <span className={isDark ? 'text-slate-400' : 'text-slate-500'}>按住多长时间后才唤出菜单</span>
+                      <span className="font-bold text-amber-500 font-mono bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/25">
+                        {(userConfig?.hold_ms ?? 0) === 0 ? '立即' : `${userConfig?.hold_ms ?? 0}ms`}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="2000"
+                      step="50"
+                      value={userConfig?.hold_ms ?? 0}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        handleUpdatePreference('hold_ms', parseInt(e.target.value));
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full accent-amber-500 h-1 bg-slate-700 rounded-lg cursor-pointer"
+                    />
+                    <span className={`text-[9px] ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                      💡 设为 0 = 立即唤出。建议设置 300~500ms 以避免误触。
+                    </span>
+                  </div>
+                </div>
+
               </div>
             )}
+
 
             {/* TAB 2: Modules Drag and Drop */}
             {activeTab === 'modules' && (

@@ -3,13 +3,18 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     Manager, Emitter,
 };
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, Arc};
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use std::fs::File;
 use std::io::{Read, Write};
 use sysinfo::{System, Networks, Components};
 use base64::Engine;
 
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+/// Cancel flag for pending hold-to-summon. Set true on ButtonRelease to cancel the pending spawn.
+static SUMMON_CANCEL: OnceLock<Arc<AtomicBool>> = OnceLock::new();
+
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, serde::Serialize)]
@@ -242,7 +247,9 @@ pub struct UserConfig {
     pub monitor_order: Option<Vec<String>>,
     pub window_click_action: Option<String>,
     pub hotkey_whitelist: Option<Vec<String>>,
+    pub hold_ms: Option<u64>,
 }
+
 
 struct ActiveRegion {
     center_x: i32,
@@ -309,8 +316,10 @@ fn load_config() -> UserConfig {
         ]),
         window_click_action: Some("switch".to_string()),
         hotkey_whitelist: Some(vec![]),
+        hold_ms: None,
     }
 }
+
 
 fn save_config(cfg: &UserConfig) {
     if let Ok(mut file) = File::create("assistant_config.json") {
@@ -352,6 +361,35 @@ fn get_summon_key_from_button(btn: rdev::Button) -> SummonKey {
 
 fn get_summon_key_from_key(key: rdev::Key) -> SummonKey {
     SummonKey::Keyboard(format!("{:?}", key))
+}
+
+/// Perform the actual summon: show window and emit summon_menu event at current mouse position.
+fn do_summon() {
+    if let Some(handle) = APP_HANDLE.get() {
+        let handle = handle.clone();
+        tauri::async_runtime::spawn(async move {
+            let state_c = handle.state::<SystemState>();
+            if let Some(window) = handle.get_webview_window("main") {
+                let (mx, my) = get_mouse_position();
+                let scale_factor = window.scale_factor().unwrap_or(1.0);
+                let logical_x = (mx as f64 / scale_factor) as i32;
+                let logical_y = (my as f64 / scale_factor) as i32;
+                {
+                    let mut r = state_c.region.lock().unwrap();
+                    r.is_active = true;
+                    r.center_x = mx;
+                    r.center_y = my;
+                }
+                window.set_ignore_cursor_events(false).ok();
+                window.show().unwrap();
+                window.set_focus().unwrap();
+                if let Some(clip_text) = read_clipboard_native() {
+                    window.emit("clipboard_update", clip_text).ok();
+                }
+                window.emit("summon_menu", POINT { x: logical_x, y: logical_y }).unwrap();
+            }
+        });
+    }
 }
 
 fn read_clipboard_native() -> Option<String> {
@@ -752,7 +790,7 @@ pub fn run() {
 
             // Start global mouse hook thread
             std::thread::spawn(move || {
-                use rdev::{grab, Button, EventType};
+                use rdev::{grab, EventType};
 
                 if let Err(error) = grab(move |event| {
                     let app_handle = APP_HANDLE.get().expect("App handle not initialized");
@@ -787,108 +825,90 @@ pub fn run() {
                     match event.event_type {
                         EventType::ButtonPress(button) => {
                             let current_key = get_summon_key_from_button(button);
-                            
+
                             let is_match = match (&current_key, &reg.config.summon_key) {
-                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => {
-                                    if *c2 == 4 {
-                                        matches!(button, Button::Unknown(_))
-                                    } else {
-                                        c1 == c2
-                                    }
-                                }
+                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => c1 == c2,
                                 _ => false,
                             };
 
                             if is_match {
-                                // Check hotkey whitelist: if foreground process is in whitelist, pass through.
                                 let whitelist = reg.config.hotkey_whitelist.clone().unwrap_or_default();
                                 if is_foreground_in_whitelist(&whitelist) {
                                     return Some(event);
                                 }
-                                if let Some(handle) = APP_HANDLE.get() {
-                                    let handle = handle.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let state_c = handle.state::<SystemState>();
-                                        if let Some(window) = handle.get_webview_window("main") {
-                                            let (mx, my) = get_mouse_position();
-                                            let scale_factor = window.scale_factor().unwrap_or(1.0);
-                                            
-                                            let logical_x = (mx as f64 / scale_factor) as i32;
-                                            let logical_y = (my as f64 / scale_factor) as i32;
+                                let hold_ms = reg.config.hold_ms.unwrap_or(0);
+                                drop(reg); // release lock before spawning
 
-                                            {
-                                                let mut r = state_c.region.lock().unwrap();
-                                                r.is_active = true;
-                                                r.center_x = mx;
-                                                r.center_y = my;
-                                            }
-                                            window.set_ignore_cursor_events(false).ok();
-                                            window.show().unwrap();
-                                            window.set_focus().unwrap();
-
-                                            if let Some(clip_text) = read_clipboard_native() {
-                                                window.emit("clipboard_update", clip_text).ok();
-                                            }
-
-                                            window.emit("summon_menu", POINT { x: logical_x, y: logical_y }).unwrap();
+                                if hold_ms == 0 {
+                                    // Instant summon
+                                    do_summon();
+                                } else {
+                                    // Hold-to-summon: reset cancel flag and wait hold_ms
+                                    let cancel = SUMMON_CANCEL.get_or_init(|| Arc::new(AtomicBool::new(false))).clone();
+                                    cancel.store(false, Ordering::SeqCst);
+                                    std::thread::spawn(move || {
+                                        std::thread::sleep(std::time::Duration::from_millis(hold_ms));
+                                        if !cancel.load(Ordering::SeqCst) {
+                                            do_summon();
                                         }
                                     });
                                 }
-                                None
-                            } else {
-                                Some(event)
+                                return None; // intercept event
                             }
+                            Some(event)
                         }
+
+                        EventType::ButtonRelease(button) => {
+                            // Cancel any pending hold-to-summon
+                            let current_key = get_summon_key_from_button(button);
+                            let is_match = match (&current_key, &reg.config.summon_key) {
+                                (SummonKey::Mouse(c1), SummonKey::Mouse(c2)) => c1 == c2,
+                                _ => false,
+                            };
+                            if is_match {
+                                if let Some(cancel) = SUMMON_CANCEL.get() {
+                                    cancel.store(true, Ordering::SeqCst);
+                                }
+                            }
+                            Some(event)
+                        }
+
                         EventType::KeyPress(key) => {
                             let current_key = get_summon_key_from_key(key);
-                            
+
                             let is_match = match (&current_key, &reg.config.summon_key) {
                                 (SummonKey::Keyboard(n1), SummonKey::Keyboard(n2)) => n1 == n2,
                                 _ => false,
                             };
 
                             if is_match {
-                                // Check hotkey whitelist: if foreground process is in whitelist, pass through.
                                 let whitelist = reg.config.hotkey_whitelist.clone().unwrap_or_default();
                                 if is_foreground_in_whitelist(&whitelist) {
                                     return Some(event);
                                 }
-                                if let Some(handle) = APP_HANDLE.get() {
-                                    let handle = handle.clone();
-                                    tauri::async_runtime::spawn(async move {
-                                        let state_c = handle.state::<SystemState>();
-                                        if let Some(window) = handle.get_webview_window("main") {
-                                            let (mx, my) = get_mouse_position();
-                                            let scale_factor = window.scale_factor().unwrap_or(1.0);
+                                let hold_ms = reg.config.hold_ms.unwrap_or(0);
+                                drop(reg);
 
-                                            let logical_x = (mx as f64 / scale_factor) as i32;
-                                            let logical_y = (my as f64 / scale_factor) as i32;
-
-                                            {
-                                                let mut r = state_c.region.lock().unwrap();
-                                                r.is_active = true;
-                                                r.center_x = mx;
-                                                r.center_y = my;
-                                            }
-                                            window.set_ignore_cursor_events(false).ok();
-                                            window.show().unwrap();
-                                            window.set_focus().unwrap();
-
-                                            if let Some(clip_text) = read_clipboard_native() {
-                                                window.emit("clipboard_update", clip_text).ok();
-                                            }
-
-                                            window.emit("summon_menu", POINT { x: logical_x, y: logical_y }).unwrap();
+                                if hold_ms == 0 {
+                                    do_summon();
+                                } else {
+                                    let cancel = SUMMON_CANCEL.get_or_init(|| Arc::new(AtomicBool::new(false))).clone();
+                                    cancel.store(false, Ordering::SeqCst);
+                                    std::thread::spawn(move || {
+                                        std::thread::sleep(std::time::Duration::from_millis(hold_ms));
+                                        if !cancel.load(Ordering::SeqCst) {
+                                            do_summon();
                                         }
                                     });
                                 }
-                                None
-                            } else {
-                                Some(event)
+                                return None;
                             }
+                            Some(event)
                         }
+
                         _ => Some(event),
                     }
+
                 }) {
                     if let Some(handle) = APP_HANDLE.get() {
                         let handle = handle.clone();

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -112,6 +112,7 @@ const RadialMenu: React.FC<RadialMenuProps> = ({
         return (
           <motion.button
             key={item.id}
+            data-node-id={item.id}
             onClick={(e) => { e.stopPropagation(); onSelectItem(item); }}
             initial={{ scale: 0, x: 0, y: 0 }}
             animate={{ scale: 1, x, y }}
@@ -165,6 +166,8 @@ export const MouseRadialAssistant: React.FC = () => {
   const [cardGap, setCardGap] = useState<number>(30);
   const [userConfig, setUserConfig] = useState<UserConfig | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  // SVG connector coords — populated by DOM measurement after animation settles
+  const [svgCoords, setSvgCoords] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
 
   useEffect(() => {
     fetchConfig();
@@ -252,37 +255,42 @@ export const MouseRadialAssistant: React.FC = () => {
   const angleStep = Math.PI / Math.max(1, count - 1);
   const startAngle = -Math.PI / 2;
 
-  // Calculate the index of the currently active item directly in sortedMenuItems
-  const activeIndex = activeItem ? sortedMenuItems.findIndex(m => m.id === activeItem.id) : -1;
-  const activeAngle = activeIndex >= 0 ? startAngle + activeIndex * angleStep : 0;
-  
-  // Physical center coordinates of active node
-  const activeNodeX = Math.cos(activeAngle) * radius;
-  const activeNodeY = Math.sin(activeAngle) * radius;
-
-  // EXACT rightmost apex point of active node
-  const rightApexX = activeNodeX + nodeSize / 2;
-  const rightApexY = activeNodeY;
-
-  // Calculate the maximum X coordinate among ALL nodes
+  // Calculate the max right X for card placement
   let maxNodeRightX = 0;
   for (let i = 0; i < count; i++) {
     const angle = startAngle + i * angleStep;
     const nodeRightX = Math.cos(angle) * radius + nodeSize / 2;
-    if (nodeRightX > maxNodeRightX) {
-      maxNodeRightX = nodeRightX;
-    }
+    if (nodeRightX > maxNodeRightX) maxNodeRightX = nodeRightX;
   }
-
-  // DetailCard left edge X position: Rightmost node edge + cardGap
   const cardLeftX = maxNodeRightX + cardGap;
 
-  // Absolute screen coordinates of the connector line endpoints
-  // position.x/y = radial disk center in screen px
-  const svgLineX1 = position ? position.x + rightApexX : 0;
-  const svgLineY1 = position ? position.y + rightApexY : 0;
-  const svgLineX2 = position ? position.x + cardLeftX : 0;
-  const svgLineY2 = svgLineY1;
+  // activeIndex/Y needed for card vertical position
+  const activeIndex = activeItem ? sortedMenuItems.findIndex(m => m.id === activeItem.id) : -1;
+  const activeAngle = activeIndex >= 0 ? startAngle + activeIndex * angleStep : 0;
+  const activeNodeY = Math.sin(activeAngle) * radius;
+
+  // ── SVG line: measure active button position from real DOM after animation ──
+  // motion.div uses translate(-50%,-50%), so its left edge = position.x - centerSize/2
+  const centerSize = nodeSize + 6; // matches RadialMenu center button size
+  useLayoutEffect(() => {
+    if (!activeItem || !position) { setSvgCoords(null); return; }
+    // Wait for framer-motion animation to settle (200ms delay + 0.03*index padding)
+    const timer = setTimeout(() => {
+      const btn = document.querySelector(`[data-node-id="${activeItem.id}"]`) as HTMLElement | null;
+      if (!btn) return;
+      const rect = btn.getBoundingClientRect();
+      // x2: card left edge in screen coords = outer-div left edge + cardLeftX
+      //   outer-div left edge = position.x - centerSize/2
+      const x2 = position.x - centerSize / 2 + cardLeftX;
+      setSvgCoords({
+        x1: rect.right,
+        y1: rect.top + rect.height / 2,
+        x2,
+        y2: rect.top + rect.height / 2,
+      });
+    }, 260);
+    return () => clearTimeout(timer);
+  }, [activeItem, position, nodeSize, cardLeftX, centerSize]);
 
   return (
     <div
@@ -304,9 +312,8 @@ export const MouseRadialAssistant: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {/* Full-screen SVG connector — drawn in screen coordinates so (0,0) === top-left of viewport.
-          position.x/y is the radial disk center, so disk-relative offsets are simply added to it. */}
-      {position && activeItem && activeIndex >= 0 && (
+      {/* Full-screen SVG connector — uses DOM-measured coordinates for pixel-perfect accuracy */}
+      {svgCoords && (
         <svg
           style={{
             position: 'fixed',
@@ -320,18 +327,18 @@ export const MouseRadialAssistant: React.FC = () => {
           }}
         >
           <line
-            x1={svgLineX1}
-            y1={svgLineY1}
-            x2={svgLineX2}
-            y2={svgLineY2}
+            x1={svgCoords.x1}
+            y1={svgCoords.y1}
+            x2={svgCoords.x2}
+            y2={svgCoords.y2}
             stroke="#f59e0b"
             strokeWidth="1.5"
             strokeDasharray="5 4"
             strokeOpacity="0.9"
           />
           <circle
-            cx={svgLineX2}
-            cy={svgLineY2}
+            cx={svgCoords.x2}
+            cy={svgCoords.y2}
             r="3"
             fill="#f59e0b"
             opacity="0.9"
