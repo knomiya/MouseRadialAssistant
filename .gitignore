@@ -15,8 +15,7 @@ src-tauri/target/
 # 个人配置（不上传）
 # ===========================
 assistant_config.json
-doc/feedback_log.md
-doc/*_log.md
+doc/
 .env
 .env.local
 !.env.example
