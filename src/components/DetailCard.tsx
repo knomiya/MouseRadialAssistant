@@ -28,7 +28,11 @@ import {
   Sun,
   Moon,
   GripVertical,
+  Star,
+  Search,
+  Bookmark,
 } from 'lucide-react';
+
 
 interface AppConfig {
   name: string;
@@ -110,21 +114,87 @@ export const DetailCard: React.FC<DetailCardProps> = ({
   const [editAppType, setEditAppType] = useState<'app' | 'web'>('app');
   const [editBrowser, setEditBrowser] = useState<string>('default');
   const [editArgs, setEditArgs] = useState<string>('');
+  const [draggedAppIdx, setDraggedAppIdx] = useState<number | null>(null);
+
+  const handleAppDragStart = (idx: number) => {
+    setDraggedAppIdx(idx);
+  };
+
+  const handleAppDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleAppDrop = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (draggedAppIdx === null || draggedAppIdx === targetIdx || !userConfig) return;
+
+    const newApps = [...userConfig.apps];
+    const [removed] = newApps.splice(draggedAppIdx, 1);
+    newApps.splice(targetIdx, 0, removed);
+
+    const newCfg = { ...userConfig, apps: newApps };
+    setUserConfig(newCfg);
+    setDraggedAppIdx(null);
+
+    invoke('save_full_config', { config: newCfg })
+      .then(() => onConfigReload?.())
+      .catch(console.error);
+  };
   const [launchError, setLaunchError] = useState<string | null>(null);
 
   // Drag and drop state for module & monitor reordering
   const [draggedIdx, setDraggedIdx] = useState<number | null>(null);
   const [draggedMonitorIdx, setDraggedMonitorIdx] = useState<number | null>(null);
 
+  const [favorites, setFavorites] = useState<ClipboardItem[]>([]);
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [clipSubTab, setClipSubTab] = useState<'history' | 'favorites'>('history');
+
   const launcherContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchUserConfig();
     fetchAutoStartStatus();
+    fetchFavorites();
     if (item.id === 'window-switch') {
       fetchOpenWindows();
     }
   }, [item.id]);
+
+  const fetchFavorites = () => {
+    invoke<ClipboardItem[]>('load_favorites')
+      .then((favs) => {
+        if (Array.isArray(favs)) setFavorites(favs);
+      })
+      .catch(console.error);
+  };
+
+  const toggleFavorite = async (targetItem: ClipboardItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const isFav = favorites.some((f) => f.id === targetItem.id || f.content === targetItem.content);
+    let updated: ClipboardItem[];
+
+    if (isFav) {
+      updated = favorites.filter((f) => f.id !== targetItem.id && f.content !== targetItem.content);
+    } else {
+      let newItem = { ...targetItem };
+      if (targetItem.content.startsWith('data:image/')) {
+        try {
+          const relativePath = await invoke<string>('save_favorite_image', { base64Data: targetItem.content });
+          newItem.filePath = relativePath;
+        } catch (err) {
+          console.error("Failed to save image to favorites dir:", err);
+        }
+      }
+      updated = [newItem, ...favorites];
+    }
+    setFavorites(updated);
+    invoke('save_favorites', { items: updated }).catch(console.error);
+  };
+
+
 
   const fetchUserConfig = () => {
     invoke<UserConfig>('get_user_config')
@@ -549,27 +619,34 @@ export const DetailCard: React.FC<DetailCardProps> = ({
       );
     }
     if (key === 'cpu_temp') {
+      const isAvailable = systemMetrics.cpuTemp > 0;
       return (
         <div key="cpu_temp" className={`p-2.5 rounded-xl border flex items-center justify-between text-xs font-bold ${isDark ? 'bg-slate-800/60 border-slate-700 text-slate-300' : 'bg-slate-50/70 border-slate-100 text-slate-600'}`}>
           <div className="flex items-center gap-1.5">
-            <Flame className="w-4 h-4 text-rose-500 animate-pulse" />
+            <Flame className="w-4 h-4 text-rose-500" />
             <span>CPU 核心温度</span>
           </div>
-          <span className="font-mono text-[11px] font-bold text-rose-500">{systemMetrics.cpuTemp} °C</span>
+          <span className={`font-mono text-[11px] font-bold ${isAvailable ? 'text-rose-500' : 'text-slate-400'}`}>
+            {isAvailable ? `${Math.round(systemMetrics.cpuTemp)} °C` : 'N/A (暂不可用)'}
+          </span>
         </div>
       );
     }
     if (key === 'gpu_temp') {
+      const isAvailable = systemMetrics.gpuTemp > 0;
       return (
         <div key="gpu_temp" className={`p-2.5 rounded-xl border flex items-center justify-between text-xs font-bold ${isDark ? 'bg-slate-800/60 border-slate-700 text-slate-300' : 'bg-slate-50/70 border-slate-100 text-slate-600'}`}>
           <div className="flex items-center gap-1.5">
             <Gamepad2 className="w-4 h-4 text-amber-500" />
             <span>GPU 显卡温度</span>
           </div>
-          <span className="font-mono text-[11px] font-bold text-amber-500">{systemMetrics.gpuTemp} °C</span>
+          <span className={`font-mono text-[11px] font-bold ${isAvailable ? 'text-amber-500' : 'text-slate-400'}`}>
+            {isAvailable ? `${Math.round(systemMetrics.gpuTemp)} °C` : 'N/A (暂不可用)'}
+          </span>
         </div>
       );
     }
+
     if (key === 'uptime') {
       return (
         <div key="uptime" className={`p-2.5 rounded-xl border flex items-center justify-between text-xs font-bold ${isDark ? 'bg-slate-800/60 border-slate-700 text-slate-300' : 'bg-slate-50/70 border-slate-100 text-slate-600'}`}>
@@ -669,104 +746,205 @@ export const DetailCard: React.FC<DetailCardProps> = ({
         )}
 
         {/* 2. Clipboard */}
-        {item.id === 'clipboard' && (
-          <div className="flex flex-col gap-3">
-            <div className={`flex border-b pb-1.5 text-[10px] font-bold gap-2 ${isDark ? 'border-slate-800 text-slate-400' : 'border-slate-100 text-slate-500'}`}>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setClipFilter('all'); }}
-                className={`px-2 py-0.5 rounded transition-all cursor-pointer ${clipFilter === 'all' ? 'bg-amber-500 text-slate-950 font-black' : 'hover:bg-slate-500/10 text-slate-400'}`}
-              >
-                全部 ({clipboards.length})
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setClipFilter('text'); }}
-                className={`px-2 py-0.5 rounded transition-all cursor-pointer ${clipFilter === 'text' ? 'bg-amber-500 text-slate-950 font-black' : 'hover:bg-slate-500/10 text-slate-400'}`}
-              >
-                文本
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setClipFilter('link'); }}
-                className={`px-2 py-0.5 rounded transition-all cursor-pointer ${clipFilter === 'link' ? 'bg-amber-500 text-slate-950 font-black' : 'hover:bg-slate-500/10 text-slate-400'}`}
-              >
-                链接
-              </button>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); setClipFilter('image'); }}
-                className={`px-2 py-0.5 rounded transition-all cursor-pointer ${clipFilter === 'image' ? 'bg-amber-500 text-slate-950 font-black' : 'hover:bg-slate-500/10 text-slate-400'}`}
-              >
-                图片
-              </button>
-            </div>
+        {item.id === 'clipboard' && (() => {
+          const textCount = clipboards.filter((c) => c.type === 'text' && !c.content.startsWith('data:image/')).length;
+          const linkCount = clipboards.filter((c) => c.type === 'link').length;
+          const imgCount = clipboards.filter((c) => c.content.startsWith('data:image/')).length;
 
-            {filteredClipboards.length > 0 ? (
-              filteredClipboards.map((clip) => {
-                const isCopied = copiedId === clip.id;
-                const isImage = clip.content.startsWith('data:image/');
-                const isLink = clip.type === 'link';
-                return (
-                  <div
-                    key={clip.id}
-                    className={`p-2.5 rounded-xl border flex flex-col gap-1 transition-all group ${
-                      isDark ? 'bg-slate-800/60 border-slate-700/60 hover:border-amber-500/40' : 'bg-slate-50/70 border-slate-100 hover:border-amber-500/20'
+          const currentList = clipSubTab === 'favorites' ? favorites : clipboards;
+
+          const filtered = currentList.filter((clip) => {
+            const isImage = clip.content.startsWith('data:image/');
+            if (clipSubTab === 'history') {
+              if (clipFilter === 'text' && (isImage || clip.type === 'link')) return false;
+              if (clipFilter === 'link' && clip.type !== 'link') return false;
+              if (clipFilter === 'image' && !isImage) return false;
+            }
+            if (searchQuery.trim()) {
+              if (isImage) return '图片截图'.includes(searchQuery.trim());
+              return clip.content.toLowerCase().includes(searchQuery.toLowerCase().trim());
+            }
+            return true;
+          });
+
+          return (
+            <div className="flex flex-col gap-2.5">
+              {/* Top Sub Tabs */}
+              <div className="flex justify-between items-center text-[10px] font-bold border-b pb-1.5 border-slate-700/40">
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setClipSubTab('history'); }}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer ${
+                      clipSubTab === 'history' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <div className="flex justify-between items-center text-[8px] text-slate-400 font-mono">
-                      <span className={`px-1.5 py-0.5 rounded border font-bold uppercase ${isDark ? 'bg-slate-700 border-slate-600 text-slate-300' : 'bg-slate-100 border-slate-200/50 text-slate-500'}`}>
-                        {isImage ? '图片' : clip.type}
-                      </span>
-                      <span>{clip.timestamp}</span>
-                    </div>
-
-                    {isImage ? (
-                      <div
-                        onClick={() => handleCopy(clip.content, clip.id)}
-                        className="py-1 flex justify-center cursor-pointer"
-                      >
-                        <img
-                          src={clip.content}
-                          alt="剪贴板截图"
-                          className="max-h-32 max-w-full rounded border border-slate-700 object-contain shadow-sm"
-                        />
-                      </div>
-                    ) : (
-                      <div className={`text-xs font-bold font-mono line-clamp-2 break-all pt-1 leading-relaxed ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>
-                        {clip.content}
-                      </div>
-                    )}
-
-                    <div className={`flex justify-end text-[9px] font-bold pt-1 border-t mt-1 ${isDark ? 'border-slate-700/80' : 'border-slate-100'}`}>
-                      {isLink ? (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleOpenWeb(clip.content); }}
-                          className="px-2 py-0.5 rounded bg-sky-500/10 hover:bg-sky-500 text-sky-500 hover:text-white border border-sky-500/20 transition-all flex items-center gap-1 cursor-pointer"
-                        >
-                          <ExternalLink className="w-2.5 h-2.5" /> 打开网页
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); handleCopy(clip.content, clip.id); }}
-                          className="text-amber-500 hover:underline cursor-pointer"
-                        >
-                          {isCopied ? '已复制 ✔' : '一键复制'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="text-center py-10 text-slate-400 text-xs">
-                暂无符合筛选条件的剪贴记录。<br />按 Ctrl+C 复制或 Win+Shift+S 截图试试！
+                    剪贴历史 ({clipboards.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setClipSubTab('favorites'); }}
+                    className={`px-2.5 py-1 rounded-lg transition-all cursor-pointer flex items-center gap-1 ${
+                      clipSubTab === 'favorites' ? 'bg-amber-500 text-slate-950 font-black shadow-sm' : 'text-slate-400 hover:text-amber-400'
+                    }`}
+                  >
+                    <Star className="w-3 h-3 fill-amber-400 text-amber-400" /> 收藏夹 ({favorites.length})
+                  </button>
+                </div>
               </div>
-            )}
-          </div>
-        )}
+
+              {/* Sub Categories Filter & Search Input */}
+              <div className="flex flex-col gap-2">
+                {clipSubTab === 'history' && (
+                  <div className={`flex text-[9px] font-bold gap-1.5`}>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setClipFilter('all'); }}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        clipFilter === 'all' ? 'bg-slate-700 text-amber-400 font-black' : 'text-slate-400 hover:text-slate-300'
+                      }`}
+                    >
+                      全部 ({clipboards.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setClipFilter('text'); }}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        clipFilter === 'text' ? 'bg-slate-700 text-amber-400 font-black' : 'text-slate-400 hover:text-slate-300'
+                      }`}
+                    >
+                      文本 ({textCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setClipFilter('link'); }}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        clipFilter === 'link' ? 'bg-slate-700 text-amber-400 font-black' : 'text-slate-400 hover:text-slate-300'
+                      }`}
+                    >
+                      链接 ({linkCount})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setClipFilter('image'); }}
+                      className={`px-2 py-0.5 rounded transition-all cursor-pointer ${
+                        clipFilter === 'image' ? 'bg-slate-700 text-amber-400 font-black' : 'text-slate-400 hover:text-slate-300'
+                      }`}
+                    >
+                      图片 ({imgCount})
+                    </button>
+                  </div>
+                )}
+
+                <div className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs ${
+                  isDark ? 'bg-slate-900/80 border-slate-700/80 text-slate-200' : 'bg-white border-slate-200 text-slate-800'
+                }`}>
+                  <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={clipSubTab === 'favorites' ? '🔍 搜索我的收藏夹...' : '🔍 搜索剪贴板文本、链接...'}
+                    className="w-full bg-transparent border-none outline-none text-[11px] font-mono placeholder:text-slate-500"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="text-[10px] text-slate-400 hover:text-slate-200"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Items List */}
+              <div className="flex flex-col gap-2 max-h-[220px] overflow-y-auto pr-0.5 scroll-smooth">
+                {filtered.length > 0 ? (
+                  filtered.map((clip) => {
+                    const isCopied = copiedId === clip.id;
+                    const isImage = clip.content.startsWith('data:image/');
+                    const isLink = clip.type === 'link';
+                    const isFav = favorites.some((f) => f.id === clip.id || f.content === clip.content);
+
+                    return (
+                      <div
+                        key={clip.id}
+                        onClick={() => handleCopy(clip.content, clip.id)}
+                        title="点击整个卡片区域即可一键复制"
+                        className={`p-2.5 rounded-xl border flex flex-col gap-1 transition-all cursor-pointer group relative ${
+                          isCopied ? 'border-emerald-500/80 bg-emerald-500/10' : ''
+                        } ${
+                          isDark ? 'bg-slate-800/60 border-slate-700/60 hover:border-amber-500/60 hover:bg-slate-800/90' : 'bg-slate-50/70 border-slate-100 hover:border-amber-500/40 hover:bg-white'
+                        }`}
+                      >
+                        <div className="flex justify-between items-center text-[8px] text-slate-400 font-mono">
+                          <span className={`px-1.5 py-0.5 rounded border font-bold uppercase ${
+                            isDark ? 'bg-slate-700 border-slate-600 text-slate-300' : 'bg-slate-100 border-slate-200/50 text-slate-500'
+                          }`}>
+                            {isImage ? '图片' : clip.type}
+                          </span>
+
+                          <div className="flex items-center gap-2">
+                            <span>{clip.timestamp}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => toggleFavorite(clip, e)}
+                              title={isFav ? '取消收藏' : '加入收藏夹'}
+                              className="p-0.5 rounded hover:bg-amber-500/20 text-slate-400 hover:text-amber-400 transition-colors"
+                            >
+                              <Star className={`w-3.5 h-3.5 ${isFav ? 'fill-amber-400 text-amber-400' : ''}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {isImage ? (
+                          <div className="py-1 flex justify-center">
+                            <img
+                              src={clip.content}
+                              alt="剪贴板截图"
+                              className="max-h-28 max-w-full rounded border border-slate-700 object-contain shadow-sm"
+                            />
+                          </div>
+                        ) : (
+                          <div className={`text-xs font-bold font-mono line-clamp-2 break-all pt-1 leading-relaxed ${
+                            isDark ? 'text-slate-200' : 'text-slate-700'
+                          }`}>
+                            {clip.content}
+                          </div>
+                        )}
+
+                        <div className={`flex justify-between items-center text-[9px] font-bold pt-1 border-t mt-1 ${
+                          isDark ? 'border-slate-700/80' : 'border-slate-100'
+                        }`}>
+                          <span className="text-[9px] text-slate-400 font-mono">
+                            {isCopied ? '✨ 已写入剪贴板！' : '🖱️ 点击任意区域一键复制'}
+                          </span>
+
+                          {isLink && (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); handleOpenWeb(clip.content); }}
+                              className="px-2 py-0.5 rounded bg-sky-500/10 hover:bg-sky-500 text-sky-500 hover:text-white border border-sky-500/20 transition-all flex items-center gap-1 cursor-pointer"
+                            >
+                              <ExternalLink className="w-2.5 h-2.5" /> 打开网页
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-center py-8 text-slate-400 text-xs">
+                    {clipSubTab === 'favorites' ? '⭐ 收藏夹空空如也，点剪贴历史右上角的 ⭐ 加入吧！' : '暂无符合搜索条件的记录。'}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
 
         {/* 3. Window Switcher Panel */}
         {item.id === 'window-switch' && (
@@ -1279,7 +1457,13 @@ export const DetailCard: React.FC<DetailCardProps> = ({
                   return (
                     <div
                       key={idx}
-                      className={`p-2.5 rounded-xl border flex flex-col gap-2 ${
+                      draggable={!isEditing}
+                      onDragStart={() => handleAppDragStart(idx)}
+                      onDragOver={(e) => handleAppDragOver(e, idx)}
+                      onDrop={(e) => handleAppDrop(e, idx)}
+                      className={`p-2.5 rounded-xl border flex flex-col gap-2 transition-all ${
+                        draggedAppIdx === idx ? 'opacity-40 border-amber-500 border-dashed' : ''
+                      } ${
                         isDark ? 'bg-slate-800/60 border-slate-700/60' : 'bg-slate-50/70 border-slate-100'
                       }`}
                     >
@@ -1379,11 +1563,15 @@ export const DetailCard: React.FC<DetailCardProps> = ({
                           </div>
                         </div>
                       ) : (
-                        <div className="flex justify-between items-center text-xs">
-                          <div className="flex flex-col gap-0.5 truncate pr-2">
-                            <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{idx + 1}. {app.name || '(未命名)'}</span>
-                            <span className="text-[9px] text-slate-400 font-mono truncate">{app.path || '未配置'}</span>
+                        <div className="flex justify-between items-center text-xs gap-2">
+                          <div className="flex items-center gap-2 truncate flex-1">
+                            <GripVertical className="w-4 h-4 text-slate-500 cursor-grab active:cursor-grabbing shrink-0 hover:text-amber-500 transition-colors" />
+                            <div className="flex flex-col gap-0.5 truncate">
+                              <span className={`font-bold ${isDark ? 'text-slate-200' : 'text-slate-700'}`}>{idx + 1}. {app.name || '(未命名)'}</span>
+                              <span className="text-[9px] text-slate-400 font-mono truncate">{app.path || '未配置'}</span>
+                            </div>
                           </div>
+
                           <div className="flex items-center gap-1 whitespace-nowrap">
                             <button
                               type="button"

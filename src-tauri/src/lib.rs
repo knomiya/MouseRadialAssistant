@@ -368,7 +368,7 @@ fn get_summon_key_from_key(key: rdev::Key) -> SummonKey {
     SummonKey::Keyboard(format!("{:?}", key))
 }
 
-/// Perform the actual summon: show window and emit summon_menu event at current mouse position.
+/// Perform summon with Dynamic Bounding Box: size window to 820x700 to fit all cards and high DPI screens.
 fn do_summon() {
     if let Some(handle) = APP_HANDLE.get() {
         let handle = handle.clone();
@@ -377,21 +377,73 @@ fn do_summon() {
             if let Some(window) = handle.get_webview_window("main") {
                 let (mx, my) = get_mouse_position();
                 let scale_factor = window.scale_factor().unwrap_or(1.0);
-                let logical_x = (mx as f64 / scale_factor) as i32;
-                let logical_y = (my as f64 / scale_factor) as i32;
+
+                // Physical size of bounding box window (820x700 logical px)
+                let win_w_logical = 820.0;
+                let win_h_logical = 700.0;
+                let win_w_phys = (win_w_logical * scale_factor) as i32;
+                let win_h_phys = (win_h_logical * scale_factor) as i32;
+
+                // Radial center offset inside window: X = 160px, Y = 350px
+                let center_offset_x = (160.0 * scale_factor) as i32;
+                let center_offset_y = (350.0 * scale_factor) as i32;
+
+                // Get screen physical size
+                let (screen_w, screen_h) = if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let s = monitor.size();
+                    (s.width as i32, s.height as i32)
+                } else {
+                    (1920, 1080)
+                };
+
+                // Calculate window top-left physical position
+                let mut win_x = mx - center_offset_x;
+                let mut win_y = my - center_offset_y;
+
+                // Clamp to screen bounds to prevent clipping
+                win_x = win_x.clamp(0, (screen_w - win_w_phys).max(0));
+                win_y = win_y.clamp(0, (screen_h - win_h_phys).max(0));
+
+                // Relative radial disk center inside the bounding box window (logical px)
+                let logical_rel_x = ((mx - win_x) as f64 / scale_factor) as i32;
+                let logical_rel_y = ((my - win_y) as f64 / scale_factor) as i32;
+
                 {
                     let mut r = state_c.region.lock().unwrap();
                     r.is_active = true;
                     r.center_x = mx;
                     r.center_y = my;
                 }
+
+                // Apply dynamic bounding window geometry
+                window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: win_w_phys as u32,
+                    height: win_h_phys as u32,
+                })).ok();
+                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: win_x,
+                    y: win_y,
+                })).ok();
+
+                // Exclude window from screen capture / screenshot tools
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    extern "system" {
+                        fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, dw_affinity: u32) -> i32;
+                    }
+                    if let Ok(hwnd) = window.hwnd() {
+                        SetWindowDisplayAffinity(hwnd.0 as _, 0x00000011);
+                    }
+                }
+
                 window.set_ignore_cursor_events(false).ok();
                 window.show().unwrap();
                 window.set_focus().unwrap();
+
                 if let Some(clip_text) = read_clipboard_native() {
                     window.emit("clipboard_update", clip_text).ok();
                 }
-                window.emit("summon_menu", POINT { x: logical_x, y: logical_y }).unwrap();
+                window.emit("summon_menu", POINT { x: logical_rel_x, y: logical_rel_y }).unwrap();
             }
         });
     }
@@ -405,30 +457,67 @@ fn do_summon_at_center() {
             let state_c = handle.state::<SystemState>();
             if let Some(window) = handle.get_webview_window("main") {
                 let scale_factor = window.scale_factor().unwrap_or(1.0);
-                let (center_x, center_y) = if let Ok(Some(monitor)) = window.primary_monitor() {
-                    let size = monitor.size();
-                    ((size.width as f64 / 2.0 / scale_factor) as i32, (size.height as f64 / 2.0 / scale_factor) as i32)
+
+                let win_w_logical = 820.0;
+                let win_h_logical = 700.0;
+                let win_w_phys = (win_w_logical * scale_factor) as i32;
+                let win_h_phys = (win_h_logical * scale_factor) as i32;
+
+                let (screen_w, screen_h) = if let Ok(Some(monitor)) = window.primary_monitor() {
+                    let s = monitor.size();
+                    (s.width as i32, s.height as i32)
                 } else {
-                    (960, 540)
+                    (1920, 1080)
                 };
+
+                let win_x = ((screen_w - win_w_phys) / 2).max(0);
+                let win_y = ((screen_h - win_h_phys) / 2).max(0);
+
+                let logical_rel_x = 160;
+                let logical_rel_y = 350;
 
                 {
                     let mut r = state_c.region.lock().unwrap();
                     r.is_active = true;
-                    r.center_x = (center_x as f64 * scale_factor) as i32;
-                    r.center_y = (center_y as f64 * scale_factor) as i32;
+                    r.center_x = win_x + (160.0 * scale_factor) as i32;
+                    r.center_y = win_y + (350.0 * scale_factor) as i32;
                 }
+
+                window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+                    width: win_w_phys as u32,
+                    height: win_h_phys as u32,
+                })).ok();
+                window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: win_x,
+                    y: win_y,
+                })).ok();
+
+                #[cfg(target_os = "windows")]
+                unsafe {
+                    extern "system" {
+                        fn SetWindowDisplayAffinity(hwnd: *mut std::ffi::c_void, dw_affinity: u32) -> i32;
+                    }
+                    if let Ok(hwnd) = window.hwnd() {
+                        SetWindowDisplayAffinity(hwnd.0 as _, 0x00000011);
+                    }
+                }
+
                 window.set_ignore_cursor_events(false).ok();
                 window.show().unwrap();
                 window.set_focus().unwrap();
+
+
+
                 if let Some(clip_text) = read_clipboard_native() {
                     window.emit("clipboard_update", clip_text).ok();
                 }
-                window.emit("summon_menu", POINT { x: center_x, y: center_y }).unwrap();
+                window.emit("summon_menu", POINT { x: logical_rel_x, y: logical_rel_y }).unwrap();
             }
         });
     }
 }
+
+
 
 
 fn read_clipboard_native() -> Option<String> {
@@ -586,6 +675,36 @@ fn save_full_config(config: UserConfig, state: tauri::State<'_, SystemState>) ->
     Ok(())
 }
 
+/// Fetch real hardware temperature using WMI MSAcpi_ThermalZoneTemperature ACPI interface.
+/// Returns -1.0 if not supported or permission denied (so frontend renders N/A with zero fake data).
+fn get_wmi_acpi_temp() -> f32 {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        let output = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue | Select-Object -ExpandProperty CurrentTemperature"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if let Ok(val) = trimmed.parse::<f32>() {
+                    if val > 2732.0 {
+                        let celsius = (val - 2732.0) / 10.0;
+                        if celsius > 0.0 && celsius < 115.0 {
+                            return celsius;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    -1.0
+}
+
 #[tauri::command]
 fn get_system_stats(state: tauri::State<'_, SystemState>) -> Result<(f32, f32, f32, f32, f32, f32, u64), String> {
     let mut sys = state.sys.lock().unwrap();
@@ -612,31 +731,34 @@ fn get_system_stats(state: tauri::State<'_, SystemState>) -> Result<(f32, f32, f
     let download_speed_kb = (total_received as f32) / 1024.0;
 
     let components = Components::new_with_refreshed_list();
-    let mut cpu_temp: f32 = 0.0;
-    let mut gpu_temp: f32 = 0.0;
+    let mut cpu_temp: f32 = -1.0;
+    let mut gpu_temp: f32 = -1.0;
 
     for component in &components {
         let label = component.label().to_lowercase();
         let temp = component.temperature();
         if label.contains("cpu") || label.contains("core") || label.contains("package") {
-            if temp > cpu_temp {
+            if temp > 0.0 && temp < 115.0 {
                 cpu_temp = temp;
             }
         }
         if label.contains("gpu") || label.contains("nvidia") || label.contains("amd") {
-            if temp > gpu_temp {
+            if temp > 0.0 && temp < 115.0 {
                 gpu_temp = temp;
             }
         }
     }
 
-    if cpu_temp == 0.0 { cpu_temp = 42.5; }
-    if gpu_temp == 0.0 { gpu_temp = 46.0; }
+    if cpu_temp < 0.0 {
+        cpu_temp = get_wmi_acpi_temp();
+    }
 
     let uptime_secs = System::uptime();
 
     Ok((cpu_usage, mem_usage, upload_speed_kb, download_speed_kb, cpu_temp, gpu_temp, uptime_secs))
 }
+
+
 
 #[tauri::command]
 fn get_open_windows() -> Result<Vec<WindowItem>, String> {
@@ -753,8 +875,80 @@ fn hide_window(window: tauri::Window, state: tauri::State<'_, SystemState>) -> R
         reg.is_recording = false;
     }
     window.set_ignore_cursor_events(true).ok();
+    // Collapse size to 0x0 so screen capture / screenshot tools won't detect any bounding box
+    window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: 0, height: 0 })).ok();
     window.hide().map_err(|e| e.to_string())
 }
+
+fn get_favorites_dir() -> std::path::PathBuf {
+    let dir = if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(d) = exe_path.parent() {
+            d.join("favorites")
+        } else {
+            std::path::PathBuf::from("favorites")
+        }
+    } else {
+        std::path::PathBuf::from("favorites")
+    };
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).ok();
+    }
+    dir
+}
+
+fn get_favorites_file_path() -> std::path::PathBuf {
+    get_favorites_dir().join("favorites.json")
+}
+
+#[tauri::command]
+fn load_favorites() -> Result<Vec<serde_json::Value>, String> {
+    let path = get_favorites_file_path();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(items) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                return Ok(items);
+            }
+        }
+    }
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+fn save_favorite_image(base64_data: String) -> Result<String, String> {
+
+    use base64::Engine;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let fav_dir = get_favorites_dir();
+    if !fav_dir.exists() {
+        std::fs::create_dir_all(&fav_dir).map_err(|e| e.to_string())?;
+    }
+
+    let clean_b64 = if let Some(pos) = base64_data.find(",") {
+        &base64_data[pos + 1..]
+    } else {
+        &base64_data
+    };
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(clean_b64)
+        .map_err(|e| e.to_string())?;
+
+    let filename = format!("fav_img_{}.png", SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis());
+    let file_path = fav_dir.join(&filename);
+    std::fs::write(&file_path, bytes).map_err(|e| e.to_string())?;
+
+    Ok(format!("favorites/{}", filename))
+}
+
+#[tauri::command]
+fn save_favorites(items: Vec<serde_json::Value>) -> Result<(), String> {
+    let path = get_favorites_file_path();
+    let json = serde_json::to_string_pretty(&items).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -794,12 +988,8 @@ pub fn run() {
             APP_HANDLE.set(app.handle().clone()).ok();
 
             if let Some(window) = app.get_webview_window("main") {
-                if let Some(monitor) = window.primary_monitor().ok().flatten() {
-                    let size = monitor.size();
-                    window.set_size(tauri::Size::Physical(*size)).ok();
-                    window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: 0, y: 0 })).ok();
-                    window.set_ignore_cursor_events(true).ok();
-                }
+                window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: 0, height: 0 })).ok();
+                window.set_ignore_cursor_events(true).ok();
             }
 
             let quit_i = MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
@@ -824,6 +1014,7 @@ pub fn run() {
                         "hide" => {
                             if let Some(window) = app.get_webview_window("main") {
                                 window.set_ignore_cursor_events(true).ok();
+                                window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: 0, height: 0 })).ok();
                                 window.hide().unwrap();
                             }
                         }
@@ -836,6 +1027,7 @@ pub fn run() {
                         if let Some(window) = app.get_webview_window("main") {
                             if window.is_visible().unwrap() {
                                 window.set_ignore_cursor_events(true).ok();
+                                window.set_size(tauri::Size::Physical(tauri::PhysicalSize { width: 0, height: 0 })).ok();
                                 window.hide().unwrap();
                             } else {
                                 do_summon_at_center();
@@ -843,8 +1035,16 @@ pub fn run() {
                         }
                     }
                 })
-
                 .build(app)?;
+
+
+
+
+
+
+
+
+
 
 
             // Start global mouse hook thread
@@ -1050,7 +1250,12 @@ pub fn run() {
             close_window_by_hwnd,
             set_auto_start,
             get_auto_start,
+            load_favorites,
+            save_favorites,
+            save_favorite_image,
         ])
         .run(tauri::generate_context!())
+
+
         .expect("error while running tauri application");
 }

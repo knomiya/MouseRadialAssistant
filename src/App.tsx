@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { MouseRadialAssistant } from './components/MouseRadialAssistant';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
@@ -76,17 +77,13 @@ export default function App() {
   const [radialPos, setRadialPos] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    const unlistenPromise = listen<{ x: number; y: number }>('summon_menu', (event) => {
+    const unlistenSummon = listen<{ x: number; y: number }>('summon_menu', (event) => {
       const coords = event.payload;
       setRadialPos({ x: coords.x, y: coords.y });
     });
 
-    const defaultX = Math.round(window.innerWidth * 0.5);
-    const defaultY = Math.round(window.innerHeight * 0.5);
-    setRadialPos({ x: defaultX, y: defaultY });
-
     return () => {
-      unlistenPromise.then((unlisten) => unlisten());
+      unlistenSummon.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -110,3 +107,5 @@ export default function App() {
     </div>
   );
 }
+
+

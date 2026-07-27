@@ -40,8 +40,10 @@ export interface ClipboardItem {
   timestamp: string;
   starred?: boolean;
   imageUrl?: string;
+  filePath?: string;
   title?: string;
 }
+
 
 export interface ThemeConfig {
   id: string;
